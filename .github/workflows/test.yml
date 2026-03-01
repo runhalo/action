@@ -1,0 +1,123 @@
+name: Test Action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-detection:
+    name: Test violation detection
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout action
+        uses: actions/checkout@v4
+
+      - name: Create test file with known violations
+        run: |
+          mkdir -p /tmp/halo-test
+          cat > /tmp/halo-test/app.ts << 'EOF'
+          // This file has intentional COPPA violations for testing
+          const apiUrl = 'http://api.example.com/api/login';
+          const profile = { isProfileVisible: true };
+          fbq('init', '123456789');
+          EOF
+
+      - name: Run Halo scan
+        uses: ./
+        id: halo
+        with:
+          path: /tmp/halo-test
+          fail-on: none
+          upload-sarif: false
+
+      - name: Verify violations detected
+        run: |
+          echo "Violations: ${{ steps.halo.outputs.violations }}"
+          echo "Critical: ${{ steps.halo.outputs.critical }}"
+          echo "High: ${{ steps.halo.outputs.high }}"
+          echo "Score: ${{ steps.halo.outputs.score }}"
+          echo "Grade: ${{ steps.halo.outputs.grade }}"
+
+          if [ "${{ steps.halo.outputs.violations }}" -eq 0 ]; then
+            echo "::error::Expected violations > 0"
+            exit 1
+          fi
+
+          if [ -z "${{ steps.halo.outputs.score }}" ]; then
+            echo "::error::Expected score output to be set"
+            exit 1
+          fi
+
+          if [ -z "${{ steps.halo.outputs.grade }}" ]; then
+            echo "::error::Expected grade output to be set"
+            exit 1
+          fi
+
+          echo "✅ All outputs verified"
+
+  test-clean:
+    name: Test clean scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout action
+        uses: actions/checkout@v4
+
+      - name: Create clean test file
+        run: |
+          mkdir -p /tmp/halo-clean
+          echo "const greeting = 'Hello, world!';" > /tmp/halo-clean/app.ts
+
+      - name: Run Halo scan
+        uses: ./
+        id: halo
+        with:
+          path: /tmp/halo-clean
+          fail-on: critical
+          upload-sarif: false
+
+      - name: Verify clean results
+        run: |
+          echo "Violations: ${{ steps.halo.outputs.violations }}"
+          echo "Score: ${{ steps.halo.outputs.score }}"
+          echo "Grade: ${{ steps.halo.outputs.grade }}"
+
+          if [ "${{ steps.halo.outputs.violations }}" -ne 0 ]; then
+            echo "::error::Expected 0 violations, got ${{ steps.halo.outputs.violations }}"
+            exit 1
+          fi
+
+          echo "✅ Clean scan verified"
+
+  test-fail-threshold:
+    name: Test fail-on threshold
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout action
+        uses: actions/checkout@v4
+
+      - name: Create test file with medium-severity violation
+        run: |
+          mkdir -p /tmp/halo-threshold
+          # HTTP URL triggers coppa-sec-006 (medium severity)
+          echo "const url = 'http://api.example.com/data';" > /tmp/halo-threshold/app.ts
+
+      - name: Run scan with fail-on=critical (should pass)
+        uses: ./
+        with:
+          path: /tmp/halo-threshold
+          fail-on: critical
+          upload-sarif: false
+
+      - name: Verify threshold passed
+        run: echo "✅ fail-on=critical correctly passed with only medium violations"

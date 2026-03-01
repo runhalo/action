@@ -1,0 +1,210 @@
+name: 'Halo COPPA Scanner'
+description: 'Scan code for COPPA 2.0 privacy risks and ethical design issues'
+author: 'Mindful Media'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  path:
+    description: 'Path to scan (default: workspace root)'
+    required: false
+    default: '.'
+  fail-on:
+    description: 'Fail when violations at this severity or above are found. Options: critical, high, medium, low, none'
+    required: false
+    default: 'critical'
+  upload-sarif:
+    description: 'Upload SARIF results to GitHub Code Scanning'
+    required: false
+    default: 'true'
+  version:
+    description: 'Halo CLI version to install (e.g., 0.2.0, latest)'
+    required: false
+    default: 'latest'
+
+outputs:
+  violations:
+    description: 'Total number of violations found'
+    value: ${{ steps.parse.outputs.violations }}
+  critical:
+    description: 'Number of critical severity violations'
+    value: ${{ steps.parse.outputs.critical }}
+  high:
+    description: 'Number of high severity violations'
+    value: ${{ steps.parse.outputs.high }}
+  score:
+    description: 'Compliance score (0-100)'
+    value: ${{ steps.parse.outputs.score }}
+  grade:
+    description: 'Compliance grade (A-F)'
+    value: ${{ steps.parse.outputs.grade }}
+  sarif-file:
+    description: 'Path to the SARIF results file'
+    value: ${{ steps.parse.outputs.sarif-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Restore scan history cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.halo/history.json
+        key: halo-history-${{ github.repository }}-${{ github.ref_name }}
+        restore-keys: |
+          halo-history-${{ github.repository }}-${{ github.ref_name }}
+          halo-history-${{ github.repository }}-
+
+    - name: Install Halo CLI
+      shell: bash
+      run: npm install --no-save @runhalo/cli@${{ inputs.version }}
+
+    - name: Run Halo scan
+      shell: bash
+      run: |
+        npx runhalo scan ${{ inputs.path }} --format json --output "$RUNNER_TEMP/halo-results.json" || true
+        npx runhalo scan ${{ inputs.path }} --format sarif --output "$RUNNER_TEMP/halo-results.sarif" || true
+
+    - name: Parse results and set outputs
+      id: parse
+      shell: bash
+      run: |
+        RESULTS="$RUNNER_TEMP/halo-results.json"
+
+        if [ ! -f "$RESULTS" ]; then
+          echo "::warning::Halo scan did not produce results"
+          echo "violations=0" >> "$GITHUB_OUTPUT"
+          echo "critical=0" >> "$GITHUB_OUTPUT"
+          echo "high=0" >> "$GITHUB_OUTPUT"
+          echo "score=100" >> "$GITHUB_OUTPUT"
+          echo "grade=A" >> "$GITHUB_OUTPUT"
+          echo "sarif-file=$RUNNER_TEMP/halo-results.sarif" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        VIOLATIONS=$(jq -r '.totalViolations // 0' "$RESULTS" 2>/dev/null || echo "0")
+        CRITICAL=$(jq '[.results[]?.violations[]? | select(.severity == "critical")] | length' "$RESULTS" 2>/dev/null || echo "0")
+        HIGH=$(jq '[.results[]?.violations[]? | select(.severity == "high")] | length' "$RESULTS" 2>/dev/null || echo "0")
+        MEDIUM=$(jq '[.results[]?.violations[]? | select(.severity == "medium")] | length' "$RESULTS" 2>/dev/null || echo "0")
+        LOW=$(jq '[.results[]?.violations[]? | select(.severity == "low")] | length' "$RESULTS" 2>/dev/null || echo "0")
+        SCORE=$(jq -r '.complianceScore.score // 100' "$RESULTS" 2>/dev/null || echo "100")
+        GRADE=$(jq -r '.complianceScore.grade // "A"' "$RESULTS" 2>/dev/null || echo "A")
+
+        echo "violations=$VIOLATIONS" >> "$GITHUB_OUTPUT"
+        echo "critical=$CRITICAL" >> "$GITHUB_OUTPUT"
+        echo "high=$HIGH" >> "$GITHUB_OUTPUT"
+        echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+        echo "grade=$GRADE" >> "$GITHUB_OUTPUT"
+        echo "sarif-file=$RUNNER_TEMP/halo-results.sarif" >> "$GITHUB_OUTPUT"
+
+        # Compute trend from scan history
+        TREND=""
+        if [ -f "$HOME/.halo/history.json" ]; then
+          ENTRIES=$(jq 'length' "$HOME/.halo/history.json" 2>/dev/null || echo "0")
+          if [ "$ENTRIES" -ge 2 ]; then
+            PREV_SCORE=$(jq '.[-2].score' "$HOME/.halo/history.json" 2>/dev/null || echo "")
+            if [ -n "$PREV_SCORE" ] && [ "$PREV_SCORE" != "null" ]; then
+              DIFF=$((SCORE - PREV_SCORE))
+              if [ "$DIFF" -gt 0 ]; then
+                TREND=" ↑ from ${PREV_SCORE} last scan (+${DIFF})"
+              elif [ "$DIFF" -lt 0 ]; then
+                TREND=" ↓ from ${PREV_SCORE} last scan (${DIFF})"
+              else
+                TREND=" → unchanged from last scan"
+              fi
+            fi
+          fi
+        fi
+
+        # Write GitHub step summary
+        {
+          echo "## 🔍 Halo COPPA Scan Results"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| **Score** | ${SCORE}/100 (${GRADE})${TREND} |"
+          echo "| **Total Violations** | ${VIOLATIONS} |"
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "| **Critical** | ❌ ${CRITICAL} |"
+          else
+            echo "| **Critical** | ✅ ${CRITICAL} |"
+          fi
+          if [ "$HIGH" -gt 0 ]; then
+            echo "| **High** | ⚠️ ${HIGH} |"
+          else
+            echo "| **High** | ✅ ${HIGH} |"
+          fi
+          echo "| **Medium** | ${MEDIUM} |"
+          echo "| **Low** | ${LOW} |"
+          echo ""
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "Run \`npx runhalo scan .\` locally for detailed results."
+            echo ""
+            if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+              echo "> **Action Required:** Fix critical and high severity issues before the [COPPA 2.0 deadline (April 22, 2026)](https://runhalo.dev)."
+            fi
+          else
+            echo "✅ No COPPA violations detected."
+          fi
+          echo ""
+          echo "_Powered by [Halo](https://runhalo.dev) — open-source COPPA compliance scanner_"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: ${{ inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ runner.temp }}/halo-results.sarif
+        category: halo-coppa
+      continue-on-error: true
+
+    - name: Check severity threshold
+      if: ${{ inputs.fail-on != 'none' }}
+      shell: bash
+      run: |
+        RESULTS="$RUNNER_TEMP/halo-results.json"
+
+        if [ ! -f "$RESULTS" ]; then
+          exit 0
+        fi
+
+        FAIL_ON="${{ inputs.fail-on }}"
+        VIOLATIONS=$(jq -r '.totalViolations // 0' "$RESULTS" 2>/dev/null || echo "0")
+
+        if [ "$VIOLATIONS" -eq 0 ]; then
+          echo "✅ No violations found"
+          exit 0
+        fi
+
+        CRITICAL=$(jq '[.results[]?.violations[]? | select(.severity == "critical")] | length' "$RESULTS" 2>/dev/null || echo "0")
+        HIGH=$(jq '[.results[]?.violations[]? | select(.severity == "high")] | length' "$RESULTS" 2>/dev/null || echo "0")
+        MEDIUM=$(jq '[.results[]?.violations[]? | select(.severity == "medium")] | length' "$RESULTS" 2>/dev/null || echo "0")
+
+        SHOULD_FAIL=0
+        case "$FAIL_ON" in
+          critical)
+            [ "$CRITICAL" -gt 0 ] && SHOULD_FAIL=1
+            ;;
+          high)
+            [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ] && SHOULD_FAIL=1
+            ;;
+          medium)
+            [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ] || [ "$MEDIUM" -gt 0 ] && SHOULD_FAIL=1
+            ;;
+          low)
+            [ "$VIOLATIONS" -gt 0 ] && SHOULD_FAIL=1
+            ;;
+        esac
+
+        if [ "$SHOULD_FAIL" -eq 1 ]; then
+          echo "::error::Halo found violations at or above '${FAIL_ON}' severity — check failed"
+          exit 1
+        fi
+
+        echo "⚠️ Violations found but below '${FAIL_ON}' threshold — passing"
