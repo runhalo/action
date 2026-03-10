@@ -44,7 +44,7 @@ inputs:
     description: 'Override framework detection (react, nextjs, vue, angular, django, rails)'
     required: false
     default: ''
-  sarif-upload:
+  upload-sarif:
     description: 'Upload SARIF results to GitHub Security tab'
     required: false
     default: 'true'
@@ -54,12 +54,16 @@ inputs:
     default: 'true'
 
 outputs:
-  total-violations:
+  violations:
     description: 'Total number of violations found'
-  critical-count:
+  critical:
     description: 'Number of critical violations'
-  high-count:
+  high:
     description: 'Number of high violations'
+  score:
+    description: 'Compliance score (0-100)'
+  grade:
+    description: 'Compliance grade (A-F)'
   scan-passed:
     description: 'Whether the scan passed the fail-on threshold'
   report-path:
@@ -123,9 +127,20 @@ runs:
           HIGH=0
         fi
 
-        echo "total-violations=$TOTAL" >> $GITHUB_OUTPUT
-        echo "critical-count=$CRITICAL" >> $GITHUB_OUTPUT
-        echo "high-count=$HIGH" >> $GITHUB_OUTPUT
+        # Parse score and grade
+        if [ -f "${{ runner.temp }}/halo-results.json" ]; then
+          SCORE=$(jq -r '.score // 100' "${{ runner.temp }}/halo-results.json")
+          GRADE=$(jq -r '.grade // "A"' "${{ runner.temp }}/halo-results.json")
+        else
+          SCORE=100
+          GRADE="A"
+        fi
+
+        echo "violations=$TOTAL" >> $GITHUB_OUTPUT
+        echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+        echo "high=$HIGH" >> $GITHUB_OUTPUT
+        echo "score=$SCORE" >> $GITHUB_OUTPUT
+        echo "grade=$GRADE" >> $GITHUB_OUTPUT
         echo "report-path=${{ runner.temp }}/halo-results.json" >> $GITHUB_OUTPUT
 
         # Determine pass/fail
@@ -138,7 +153,7 @@ runs:
         echo "scan-passed=$PASSED" >> $GITHUB_OUTPUT
 
     - name: Generate SARIF
-      if: inputs.sarif-upload == 'true'
+      if: inputs.upload-sarif == 'true'
       shell: bash
       run: |
         SARIF_ARGS="${{ inputs.path }} --format sarif --output ${{ runner.temp }}/halo-results.sarif"
@@ -148,7 +163,7 @@ runs:
         npx runhalo scan $SARIF_ARGS --no-prompt --offline || true
 
     - name: Upload SARIF
-      if: inputs.sarif-upload == 'true'
+      if: inputs.upload-sarif == 'true'
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ runner.temp }}/halo-results.sarif
