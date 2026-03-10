@@ -56,18 +56,25 @@ inputs:
 outputs:
   violations:
     description: 'Total number of violations found'
+    value: ${{ steps.scan.outputs.violations }}
   critical:
     description: 'Number of critical violations'
+    value: ${{ steps.scan.outputs.critical }}
   high:
     description: 'Number of high violations'
+    value: ${{ steps.scan.outputs.high }}
   score:
     description: 'Compliance score (0-100)'
+    value: ${{ steps.scan.outputs.score }}
   grade:
     description: 'Compliance grade (A-F)'
+    value: ${{ steps.scan.outputs.grade }}
   scan-passed:
     description: 'Whether the scan passed the fail-on threshold'
+    value: ${{ steps.scan.outputs.scan-passed }}
   report-path:
     description: 'Path to the JSON results file'
+    value: ${{ steps.scan.outputs.report-path }}
 
 runs:
   using: 'composite'
