@@ -112,8 +112,13 @@ runs:
           SCAN_ARGS="$SCAN_ARGS --review-board"
         fi
 
-        # Add severity filter
-        SCAN_ARGS="$SCAN_ARGS --severity ${{ inputs.severity-threshold }}"
+        # Map severity-threshold to CLI --severity flags (show this level and above)
+        case "${{ inputs.severity-threshold }}" in
+          critical) SCAN_ARGS="$SCAN_ARGS --severity critical" ;;
+          high)     SCAN_ARGS="$SCAN_ARGS --severity critical high" ;;
+          medium)   SCAN_ARGS="$SCAN_ARGS --severity critical high medium" ;;
+          low|*)    ;; # Show all severities (no filter needed)
+        esac
 
         # License key
         if [ -n "$HALO_LICENSE_KEY" ]; then
