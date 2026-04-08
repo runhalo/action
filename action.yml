@@ -1,18 +1,16 @@
-# Halo — Ethical Code Scanner for Children's Products
+# Halo — Children's Privacy Compliance Scanner
 # GitHub Action for CI/CD integration
 # https://runhalo.dev
 #
 # Usage:
-#   - uses: runhalo/halo-action@v1
+#   - uses: runhalo/action@v1
 #     with:
-#       pack: 'coppa ethical ai-audit'
 #       severity-threshold: 'high'
-#       review-board: true
 #     env:
 #       HALO_LICENSE_KEY: ${{ secrets.HALO_LICENSE_KEY }}
 
-name: 'Halo Ethical Code Scanner'
-description: 'Scan code for COPPA, ethical design, and AI safety compliance violations'
+name: 'Halo Compliance Scanner'
+description: 'Scan code for children''s privacy compliance risks — COPPA violations, dark patterns, missing consent flows'
 author: 'Mindful Media'
 
 branding:
@@ -24,10 +22,6 @@ inputs:
     description: 'Path to scan (default: current directory)'
     required: false
     default: '.'
-  pack:
-    description: 'Rule packs to scan (space-separated): coppa, ethical, ai-audit, au-sbd, au-osa, eu-ai-act'
-    required: false
-    default: 'coppa'
   severity-threshold:
     description: 'Minimum severity to report: critical, high, medium, low'
     required: false
@@ -36,20 +30,12 @@ inputs:
     description: 'Severity level that blocks merge: critical, high, medium, low, none'
     required: false
     default: 'critical'
-  review-board:
-    description: 'Enable AI Review Board for clinical false-positive filtering (requires Pro license)'
-    required: false
-    default: 'false'
   framework:
     description: 'Override framework detection (react, nextjs, vue, angular, django, rails)'
     required: false
     default: ''
   upload-sarif:
     description: 'Upload SARIF results to GitHub Security tab'
-    required: false
-    default: 'true'
-  pr-comment:
-    description: 'Post scan summary as PR comment'
     required: false
     default: 'true'
 
@@ -97,27 +83,17 @@ runs:
         SCAN_ARGS="${{ inputs.path }}"
         SCAN_ARGS="$SCAN_ARGS --format json --output ${{ runner.temp }}/halo-results.json"
 
-        # Add pack flag
-        if [ "${{ inputs.pack }}" != "" ]; then
-          SCAN_ARGS="$SCAN_ARGS --pack ${{ inputs.pack }}"
-        fi
-
         # Add framework override
         if [ "${{ inputs.framework }}" != "" ]; then
           SCAN_ARGS="$SCAN_ARGS --framework ${{ inputs.framework }}"
         fi
 
-        # Add review board
-        if [ "${{ inputs.review-board }}" == "true" ]; then
-          SCAN_ARGS="$SCAN_ARGS --review-board"
-        fi
-
-        # Map severity-threshold to CLI --severity flags (show this level and above)
+        # Map severity-threshold to CLI --severity flags
         case "${{ inputs.severity-threshold }}" in
           critical) SCAN_ARGS="$SCAN_ARGS --severity critical" ;;
           high)     SCAN_ARGS="$SCAN_ARGS --severity critical high" ;;
           medium)   SCAN_ARGS="$SCAN_ARGS --severity critical high medium" ;;
-          low|*)    ;; # Show all severities (no filter needed)
+          low|*)    ;;
         esac
 
         # License key
@@ -133,17 +109,12 @@ runs:
           TOTAL=$(jq -r '.totalViolations // 0' "${{ runner.temp }}/halo-results.json")
           CRITICAL=$(jq '[.results[]?.violations[]? | select(.severity == "critical")] | length' "${{ runner.temp }}/halo-results.json")
           HIGH=$(jq '[.results[]?.violations[]? | select(.severity == "high")] | length' "${{ runner.temp }}/halo-results.json")
+          SCORE=$(jq -r '.score // 100' "${{ runner.temp }}/halo-results.json")
+          GRADE=$(jq -r '.grade // "A"' "${{ runner.temp }}/halo-results.json")
         else
           TOTAL=0
           CRITICAL=0
           HIGH=0
-        fi
-
-        # Parse score and grade
-        if [ -f "${{ runner.temp }}/halo-results.json" ]; then
-          SCORE=$(jq -r '.score // 100' "${{ runner.temp }}/halo-results.json")
-          GRADE=$(jq -r '.grade // "A"' "${{ runner.temp }}/halo-results.json")
-        else
           SCORE=100
           GRADE="A"
         fi
@@ -168,11 +139,7 @@ runs:
       if: inputs.upload-sarif == 'true'
       shell: bash
       run: |
-        SARIF_ARGS="${{ inputs.path }} --format sarif --output ${{ runner.temp }}/halo-results.sarif"
-        if [ "${{ inputs.pack }}" != "" ]; then
-          SARIF_ARGS="$SARIF_ARGS --pack ${{ inputs.pack }}"
-        fi
-        npx runhalo scan $SARIF_ARGS --no-prompt --offline || true
+        npx runhalo scan ${{ inputs.path }} --format sarif --output ${{ runner.temp }}/halo-results.sarif --no-prompt --offline || true
 
     - name: Upload SARIF
       if: inputs.upload-sarif == 'true'
